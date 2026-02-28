@@ -1,0 +1,30 @@
+version: '3.8'
+services:
+  # Base de datos en memoria
+  redis:
+    image: redis:alpine
+    container_name: speed_layer_redis
+    ports:
+      - "6379:6379"
+
+  # Zookeeper (Requisito para Kafka)
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.4.0
+    container_name: speed_layer_zookeeper  # <-- Renombrado para evitar conflictos
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+
+  # El broker de mensajes
+  kafka:
+    image: confluentinc/cp-kafka:7.4.0
+    container_name: speed_layer_kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: speed_layer_zookeeper:2181  # <-- Actualizado para que coincida
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
