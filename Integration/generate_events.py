@@ -2,40 +2,12 @@
 # -*- coding: utf-8 -*-
 
 """
-Genera eventos dummy e-commerce en JSONL (1 JSON por línea) con esta estructura:
+Genera eventos dummy e-commerce en JSONL (1 JSON por línea) con esta estructura fija.
 
-{
-  "event_id": "string (uuid hex)",
-  "event_time": "string ISO-8601 UTC",
-  "event_name": "string enum",
-  "user_id": "string",
-  "session_id": "string",
-  "device": "string (mobile|desktop|tablet)",
-  "currency": "string (ej: USD)",
+Uso recomendado para Kafka:
+  python generate_events.py --n 200 --stdout | kafka-console-producer ...
 
-  "product_id": "string|null",
-  "quantity": "number|null",
-  "price": "number|null",
-
-  "cart_id": "string",
-  "checkout_id": "string|null",
-  "order_id": "string|null",
-
-  "cart_items_qty": "number|null",
-  "cart_value": "number|null",
-  "revenue": "number|null",
-
-  "page_url": "string|null",
-  "referrer": "string|null",
-
-  "items": "array|null"
-}
-
-Eventos generados (event_name):
-- product_view, click
-- add_to_cart, update_cart, remove_from_cart
-- begin_checkout, checkout_progress
-- purchase
+Si NO usas --stdout, escribe a archivo (default: events.jsonl).
 """
 
 import argparse
@@ -138,22 +110,17 @@ def base_event(
         "session_id": session_id,
         "device": device,
         "currency": currency,
-
         "product_id": None,
         "quantity": None,
         "price": None,
-
         "cart_id": cart_id,
         "checkout_id": None,
         "order_id": None,
-
         "cart_items_qty": None,
         "cart_value": None,
         "revenue": None,
-
         "page_url": None,
         "referrer": referrer,
-
         "items": None,
     }
 
@@ -322,17 +289,18 @@ def generate_events(
                 for pid, q in cart.items():
                     p = product_map[pid]
                     line_total = round(p.price * q, 2)
-                    items.append({
-                        "product_id": pid,
-                        "name": p.name,
-                        "category": p.category,
-                        "price": p.price,
-                        "quantity": q,
-                        "line_total": line_total,
-                    })
+                    items.append(
+                        {
+                            "product_id": pid,
+                            "name": p.name,
+                            "category": p.category,
+                            "price": p.price,
+                            "quantity": q,
+                            "line_total": line_total,
+                        }
+                    )
                     revenue += p.price * q
 
-                # Totales del carrito ANTES de vaciarlo
                 q_total, v_total = cart_totals(cart, product_map)
 
                 e["checkout_id"] = checkout_id
@@ -343,7 +311,6 @@ def generate_events(
                 e["cart_value"] = v_total
                 e["page_url"] = f"https://example.com/order/{order_id}/confirmation"
 
-                # cerrar compra
                 cart.clear()
                 in_checkout = False
                 checkout_id = None
@@ -360,7 +327,7 @@ def write_jsonl(path: str, events: List[dict]) -> None:
             f.write(json.dumps(e, ensure_ascii=False) + "\n")
 
 
-def main():
+def main() -> None:
     ap = argparse.ArgumentParser(description="Genera eventos dummy e-commerce (JSONL) con estructura fija.")
     ap.add_argument("--n", type=int, default=1000, help="Cantidad total de eventos (default: 1000)")
     ap.add_argument("--seed", type=int, default=42, help="Semilla RNG (default: 42)")
@@ -368,6 +335,7 @@ def main():
     ap.add_argument("--products", type=int, default=120, help="Cantidad de productos (default: 120)")
     ap.add_argument("--days-back", type=int, default=14, help="Ventana temporal hacia atrás (default: 14 días)")
     ap.add_argument("--out", default="events.jsonl", help="Archivo de salida JSONL (default: events.jsonl)")
+    ap.add_argument("--stdout", action="store_true", help="Imprimir eventos a stdout (JSON por línea)")
     args = ap.parse_args()
 
     events = generate_events(
@@ -377,8 +345,13 @@ def main():
         n_products=args.products,
         days_back=args.days_back,
     )
-    write_jsonl(args.out, events)
-    print(f"OK: {len(events)} eventos -> {args.out}")
+
+    if args.stdout:
+        for e in events:
+            print(json.dumps(e, ensure_ascii=False))
+    else:
+        write_jsonl(args.out, events)
+        print(f"OK: {len(events)} eventos -> {args.out}")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,17 @@
+{
+  "name": "hdfs-sink-raw",
+  "config": {
+    "connector.class": "io.confluent.connect.hdfs.HdfsSinkConnector",
+    "tasks.max": "1",
+    "topics": "ecommerce-events",
+    "hdfs.url": "hdfs://namenode:8020",
+    "flush.size": "3",
+    "rotate.interval.ms": "60000",
+    "partitioner.class": "io.confluent.connect.storage.partitioner.DefaultPartitioner",
+    "format.class": "io.confluent.connect.hdfs.json.JsonFormat",
+    "schema.compatibility": "NONE",
+    "path": "/data/raw/events",
+    "locale": "en",
+    "timezone": "UTC"
+  }
+}
