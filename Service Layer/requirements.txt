@@ -1,0 +1,8 @@
+streamlit
+pandas
+redis
+python-dotenv
+PyHive
+thrift
+thrift-sasl
+pure-sasl
