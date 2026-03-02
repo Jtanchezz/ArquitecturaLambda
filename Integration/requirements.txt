@@ -6,3 +6,4 @@ PyHive
 thrift
 thrift-sasl
 pure-sasl
+altair
