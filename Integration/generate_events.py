@@ -4,15 +4,20 @@
 """
 Genera eventos dummy e-commerce en JSONL (1 JSON por línea) con esta estructura fija.
 
-Uso recomendado para Kafka:
-  python generate_events.py --n 200 --stdout | kafka-console-producer ...
+Uso batch:
+  python generate_events.py --n 200 --stdout
 
-Si NO usas --stdout, escribe a archivo (default: events.jsonl).
+Uso stream por 2 minutos:
+  python generate_events.py --stream --stdout
+
+Uso recomendado para Kafka:
+  python generate_events.py --stream --stdout | kafka-console-producer ...
 """
 
 import argparse
 import json
 import random
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -38,6 +43,21 @@ class Product:
     name: str
     category: str
     price: float
+
+
+@dataclass
+class SessionState:
+    user_id: str
+    session_id: str
+    device: str
+    currency: str
+    referrer: str
+    cart_id: str
+    cart: Dict[str, int]
+    in_checkout: bool
+    checkout_id: Optional[str]
+    last_product_id: Optional[str]
+    remaining_steps: int
 
 
 def iso_utc(ts: datetime) -> str:
@@ -125,6 +145,186 @@ def base_event(
     }
 
 
+def new_session(users: List[str], rng: random.Random) -> SessionState:
+    return SessionState(
+        user_id=rng.choice(users),
+        session_id=uuid.uuid4().hex,
+        device=rng.choice(DEVICES),
+        currency=rng.choice(CURRENCIES),
+        referrer=rng.choice(REFERRERS),
+        cart_id=uuid.uuid4().hex,
+        cart={},
+        in_checkout=False,
+        checkout_id=None,
+        last_product_id=None,
+        remaining_steps=rng.randint(8, 35),
+    )
+
+
+def advance_session(
+    state: SessionState,
+    *,
+    rng: random.Random,
+    products: List[Product],
+    product_map: Dict[str, Product],
+    ts: datetime,
+) -> Tuple[Optional[dict], bool]:
+    if state.remaining_steps <= 0:
+        return None, True
+
+    choices: List[Tuple[str, float]] = [
+        ("product_view", 0.36),
+        ("click", 0.20 if state.last_product_id else 0.10),
+        ("add_to_cart", 0.16 if state.last_product_id else 0.06),
+    ]
+    if state.cart:
+        choices += [
+            ("update_cart", 0.06),
+            ("remove_from_cart", 0.06),
+            ("begin_checkout", 0.06 if not state.in_checkout else 0.0),
+        ]
+    if state.in_checkout:
+        choices += [
+            ("checkout_progress", 0.07),
+            ("purchase", 0.05),
+        ]
+    choices.append(("end_session", 0.02))
+
+    event_name = weighted_choice(rng, choices)
+    state.remaining_steps -= 1
+
+    if event_name == "end_session":
+        return None, True
+
+    e = base_event(
+        event_name=event_name,
+        ts=ts,
+        user_id=state.user_id,
+        session_id=state.session_id,
+        device=state.device,
+        currency=state.currency,
+        cart_id=state.cart_id,
+        referrer=state.referrer,
+    )
+
+    if event_name == "product_view":
+        p = rng.choice(products)
+        state.last_product_id = p.product_id
+        e["product_id"] = p.product_id
+        e["price"] = p.price
+        e["page_url"] = f"https://example.com/product/{p.product_id}"
+
+    elif event_name == "click":
+        pid = state.last_product_id or rng.choice(products).product_id
+        p = product_map[pid]
+        state.last_product_id = pid
+        e["product_id"] = pid
+        e["price"] = p.price
+        e["page_url"] = f"https://example.com/product/{pid}#details"
+
+    elif event_name == "add_to_cart":
+        pid = state.last_product_id or rng.choice(products).product_id
+        p = product_map[pid]
+        qty_add = rng.choice([1, 1, 1, 2, 2, 3])
+        state.cart[pid] = state.cart.get(pid, 0) + qty_add
+        e["product_id"] = pid
+        e["quantity"] = qty_add
+        e["price"] = p.price
+        e["page_url"] = "https://example.com/cart"
+        q, v = cart_totals(state.cart, product_map)
+        e["cart_items_qty"] = q
+        e["cart_value"] = v
+
+    elif event_name == "update_cart":
+        pid = pick_cart_item(rng, state.cart)
+        if pid is None:
+            return None, False
+        p = product_map[pid]
+        new_qty = rng.randint(1, 5)
+        state.cart[pid] = new_qty
+        e["product_id"] = pid
+        e["quantity"] = new_qty
+        e["price"] = p.price
+        e["page_url"] = "https://example.com/cart"
+        q, v = cart_totals(state.cart, product_map)
+        e["cart_items_qty"] = q
+        e["cart_value"] = v
+
+    elif event_name == "remove_from_cart":
+        pid = pick_cart_item(rng, state.cart)
+        if pid is None:
+            return None, False
+        p = product_map[pid]
+        removed_qty = state.cart.get(pid, 1)
+        state.cart.pop(pid, None)
+        e["product_id"] = pid
+        e["quantity"] = removed_qty
+        e["price"] = p.price
+        e["page_url"] = "https://example.com/cart"
+        q, v = cart_totals(state.cart, product_map)
+        e["cart_items_qty"] = q
+        e["cart_value"] = v
+
+    elif event_name == "begin_checkout":
+        if not state.cart or state.in_checkout:
+            return None, False
+        state.in_checkout = True
+        state.checkout_id = uuid.uuid4().hex
+        e["checkout_id"] = state.checkout_id
+        e["page_url"] = "https://example.com/checkout"
+        q, v = cart_totals(state.cart, product_map)
+        e["cart_items_qty"] = q
+        e["cart_value"] = v
+
+    elif event_name == "checkout_progress":
+        if not state.in_checkout or not state.checkout_id:
+            return None, False
+        e["checkout_id"] = state.checkout_id
+        e["page_url"] = f"https://example.com/checkout?step={rng.randint(1,3)}"
+        q, v = cart_totals(state.cart, product_map)
+        e["cart_items_qty"] = q
+        e["cart_value"] = v
+
+    elif event_name == "purchase":
+        if not state.in_checkout or not state.checkout_id or not state.cart:
+            return None, False
+
+        order_id = uuid.uuid4().hex
+        items = []
+        revenue = 0.0
+        for pid, q in state.cart.items():
+            p = product_map[pid]
+            line_total = round(p.price * q, 2)
+            items.append(
+                {
+                    "product_id": pid,
+                    "name": p.name,
+                    "category": p.category,
+                    "price": p.price,
+                    "quantity": q,
+                    "line_total": line_total,
+                }
+            )
+            revenue += p.price * q
+
+        q_total, v_total = cart_totals(state.cart, product_map)
+
+        e["checkout_id"] = state.checkout_id
+        e["order_id"] = order_id
+        e["items"] = items
+        e["revenue"] = round(revenue, 2)
+        e["cart_items_qty"] = q_total
+        e["cart_value"] = v_total
+        e["page_url"] = f"https://example.com/order/{order_id}/confirmation"
+
+        state.cart.clear()
+        state.in_checkout = False
+        state.checkout_id = None
+
+    done = state.remaining_steps <= 0
+    return e, done
+
+
 def generate_events(
     n_events: int = 1000,
     seed: int = 42,
@@ -148,177 +348,18 @@ def generate_events(
     events: List[dict] = []
 
     while len(events) < n_events:
-        user_id = rng.choice(users)
-        session_id = uuid.uuid4().hex
-        device = rng.choice(DEVICES)
-        currency = rng.choice(CURRENCIES)
-        referrer = rng.choice(REFERRERS)
-
-        cart_id = uuid.uuid4().hex
-        cart: Dict[str, int] = {}
-        in_checkout = False
-        checkout_id: Optional[str] = None
-        last_product_id: Optional[str] = None
-
+        state = new_session(users, rng)
         ts = random_start_time()
-        session_target = rng.randint(8, 35)
 
-        for _ in range(session_target):
-            if len(events) >= n_events:
-                break
-
-            # Probabilidades adaptadas al estado de la sesión
-            choices: List[Tuple[str, float]] = [
-                ("product_view", 0.36),
-                ("click", 0.20 if last_product_id else 0.10),
-                ("add_to_cart", 0.16 if last_product_id else 0.06),
-            ]
-            if cart:
-                choices += [
-                    ("update_cart", 0.06),
-                    ("remove_from_cart", 0.06),
-                    ("begin_checkout", 0.06 if not in_checkout else 0.0),
-                ]
-            if in_checkout:
-                choices += [
-                    ("checkout_progress", 0.07),
-                    ("purchase", 0.05),
-                ]
-            choices.append(("end_session", 0.02))
-
-            event_name = weighted_choice(rng, choices)
-            if event_name == "end_session":
-                break
-
-            e = base_event(
-                event_name=event_name,
-                ts=ts,
-                user_id=user_id,
-                session_id=session_id,
-                device=device,
-                currency=currency,
-                cart_id=cart_id,
-                referrer=referrer,
-            )
-
-            if event_name == "product_view":
-                p = rng.choice(products)
-                last_product_id = p.product_id
-                e["product_id"] = p.product_id
-                e["price"] = p.price
-                e["page_url"] = f"https://example.com/product/{p.product_id}"
-
-            elif event_name == "click":
-                pid = last_product_id or rng.choice(products).product_id
-                p = product_map[pid]
-                last_product_id = pid
-                e["product_id"] = pid
-                e["price"] = p.price
-                e["page_url"] = f"https://example.com/product/{pid}#details"
-
-            elif event_name == "add_to_cart":
-                pid = last_product_id or rng.choice(products).product_id
-                p = product_map[pid]
-                qty_add = rng.choice([1, 1, 1, 2, 2, 3])
-                cart[pid] = cart.get(pid, 0) + qty_add
-                e["product_id"] = pid
-                e["quantity"] = qty_add
-                e["price"] = p.price
-                e["page_url"] = "https://example.com/cart"
-                q, v = cart_totals(cart, product_map)
-                e["cart_items_qty"] = q
-                e["cart_value"] = v
-
-            elif event_name == "update_cart":
-                pid = pick_cart_item(rng, cart)
-                if pid is None:
-                    continue
-                p = product_map[pid]
-                new_qty = rng.randint(1, 5)
-                cart[pid] = new_qty
-                e["product_id"] = pid
-                e["quantity"] = new_qty
-                e["price"] = p.price
-                e["page_url"] = "https://example.com/cart"
-                q, v = cart_totals(cart, product_map)
-                e["cart_items_qty"] = q
-                e["cart_value"] = v
-
-            elif event_name == "remove_from_cart":
-                pid = pick_cart_item(rng, cart)
-                if pid is None:
-                    continue
-                p = product_map[pid]
-                removed_qty = cart.get(pid, 1)
-                cart.pop(pid, None)
-                e["product_id"] = pid
-                e["quantity"] = removed_qty
-                e["price"] = p.price
-                e["page_url"] = "https://example.com/cart"
-                q, v = cart_totals(cart, product_map)
-                e["cart_items_qty"] = q
-                e["cart_value"] = v
-
-            elif event_name == "begin_checkout":
-                if not cart or in_checkout:
-                    continue
-                in_checkout = True
-                checkout_id = uuid.uuid4().hex
-                e["checkout_id"] = checkout_id
-                e["page_url"] = "https://example.com/checkout"
-                q, v = cart_totals(cart, product_map)
-                e["cart_items_qty"] = q
-                e["cart_value"] = v
-
-            elif event_name == "checkout_progress":
-                if not in_checkout or not checkout_id:
-                    continue
-                e["checkout_id"] = checkout_id
-                e["page_url"] = f"https://example.com/checkout?step={rng.randint(1,3)}"
-                q, v = cart_totals(cart, product_map)
-                e["cart_items_qty"] = q
-                e["cart_value"] = v
-
-            elif event_name == "purchase":
-                if not in_checkout or not checkout_id or not cart:
-                    continue
-
-                order_id = uuid.uuid4().hex
-                items = []
-                revenue = 0.0
-                for pid, q in cart.items():
-                    p = product_map[pid]
-                    line_total = round(p.price * q, 2)
-                    items.append(
-                        {
-                            "product_id": pid,
-                            "name": p.name,
-                            "category": p.category,
-                            "price": p.price,
-                            "quantity": q,
-                            "line_total": line_total,
-                        }
-                    )
-                    revenue += p.price * q
-
-                q_total, v_total = cart_totals(cart, product_map)
-
-                e["checkout_id"] = checkout_id
-                e["order_id"] = order_id
-                e["items"] = items
-                e["revenue"] = round(revenue, 2)
-                e["cart_items_qty"] = q_total
-                e["cart_value"] = v_total
-                e["page_url"] = f"https://example.com/order/{order_id}/confirmation"
-
-                cart.clear()
-                in_checkout = False
-                checkout_id = None
-
-            events.append(e)
+        while len(events) < n_events:
+            e, done = advance_session(state, rng=rng, products=products, product_map=product_map, ts=ts)
             ts += timedelta(seconds=rng.randint(5, 140))
+            if e is not None:
+                events.append(e)
+            if done:
+                break
 
-    return events
+    return events[:n_events]
 
 
 def write_jsonl(path: str, events: List[dict]) -> None:
@@ -327,16 +368,101 @@ def write_jsonl(path: str, events: List[dict]) -> None:
             f.write(json.dumps(e, ensure_ascii=False) + "\n")
 
 
+def stream_events(
+    *,
+    duration_seconds: int,
+    events_per_second: float,
+    seed: int,
+    n_users: int,
+    n_products: int,
+    out_path: Optional[str],
+    to_stdout: bool,
+) -> None:
+    if events_per_second <= 0:
+        raise ValueError("--eps debe ser > 0")
+
+    rng = random.Random(seed)
+    users = make_users(n_users)
+    products = make_products(n_products, rng)
+    product_map = {p.product_id: p for p in products}
+
+    end_time = time.monotonic() + duration_seconds
+    interval = 1.0 / events_per_second
+    next_emit = time.monotonic()
+
+    emitted = 0
+    state: Optional[SessionState] = None
+
+    file_handle = None
+    try:
+        if not to_stdout:
+            file_handle = open(out_path or "events.jsonl", "a", encoding="utf-8")
+
+        while time.monotonic() < end_time:
+            if state is None:
+                state = new_session(users, rng)
+
+            event = None
+            done = False
+            while event is None:
+                event, done = advance_session(
+                    state,
+                    rng=rng,
+                    products=products,
+                    product_map=product_map,
+                    ts=datetime.now(timezone.utc),
+                )
+                if done:
+                    state = None
+                    if event is None:
+                        break
+
+            if event is not None:
+                line = json.dumps(event, ensure_ascii=False)
+                if to_stdout:
+                    print(line, flush=True)
+                else:
+                    file_handle.write(line + "\n")
+                    file_handle.flush()
+                emitted += 1
+
+            next_emit += interval
+            sleep_for = next_emit - time.monotonic()
+            if sleep_for > 0:
+                time.sleep(sleep_for)
+
+        if not to_stdout:
+            print(f"OK: {emitted} eventos emitidos en {duration_seconds}s -> {out_path or 'events.jsonl'}")
+    finally:
+        if file_handle is not None:
+            file_handle.close()
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Genera eventos dummy e-commerce (JSONL) con estructura fija.")
-    ap.add_argument("--n", type=int, default=1000, help="Cantidad total de eventos (default: 1000)")
+    ap.add_argument("--n", type=int, default=1000, help="Cantidad total de eventos en modo batch (default: 1000)")
     ap.add_argument("--seed", type=int, default=42, help="Semilla RNG (default: 42)")
     ap.add_argument("--users", type=int, default=200, help="Cantidad de usuarios (default: 200)")
     ap.add_argument("--products", type=int, default=120, help="Cantidad de productos (default: 120)")
-    ap.add_argument("--days-back", type=int, default=14, help="Ventana temporal hacia atrás (default: 14 días)")
+    ap.add_argument("--days-back", type=int, default=14, help="Ventana temporal hacia atrás en batch (default: 14 días)")
     ap.add_argument("--out", default="events.jsonl", help="Archivo de salida JSONL (default: events.jsonl)")
     ap.add_argument("--stdout", action="store_true", help="Imprimir eventos a stdout (JSON por línea)")
+    ap.add_argument("--stream", action="store_true", help="Emitir eventos continuamente")
+    ap.add_argument("--duration-seconds", type=int, default=120, help="Duración del stream en segundos (default: 120)")
+    ap.add_argument("--eps", type=float, default=5.0, help="Eventos por segundo en modo stream (default: 5.0)")
     args = ap.parse_args()
+
+    if args.stream:
+        stream_events(
+            duration_seconds=args.duration_seconds,
+            events_per_second=args.eps,
+            seed=args.seed,
+            n_users=args.users,
+            n_products=args.products,
+            out_path=args.out,
+            to_stdout=args.stdout,
+        )
+        return
 
     events = generate_events(
         n_events=args.n,
