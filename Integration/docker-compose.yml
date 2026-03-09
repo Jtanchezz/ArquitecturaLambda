@@ -1,0 +1,216 @@
+version: "3.9"
+
+services:
+  # ========= Kafka =========
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.0
+    hostname: zookeeper
+    container_name: integration_zookeeper
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    hostname: kafka
+    container_name: integration_kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: "zookeeper:2181"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT"
+      KAFKA_LISTENERS: "PLAINTEXT://0.0.0.0:29092,PLAINTEXT_HOST://0.0.0.0:9092"
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092"
+      KAFKA_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_MIN_INSYNC_REPLICAS: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+
+  # ========= Redis (Speed Store) =========
+  redis:
+    image: redis:alpine
+    container_name: integration_redis
+    ports:
+      - "6379:6379"
+
+  # ========= HDFS =========
+  namenode:
+    image: bde2020/hadoop-namenode:2.0.0-hadoop3.2.1-java8
+    container_name: integration_namenode
+    hostname: namenode
+    ports:
+      - "9870:9870"
+      - "8020:8020"
+    environment:
+      CLUSTER_NAME: "dev"
+      HADOOP_CONF_DIR: "/opt/hadoop/etc/hadoop"
+    volumes:
+      - namenode:/hadoop/dfs/name
+      - ./config/hadoop:/opt/hadoop/etc/hadoop
+
+  datanode:
+    image: bde2020/hadoop-datanode:2.0.0-hadoop3.2.1-java8
+    container_name: integration_datanode
+    hostname: datanode
+    depends_on:
+      - namenode
+    ports:
+      - "9864:9864"
+    environment:
+      CLUSTER_NAME: "dev"
+      HADOOP_CONF_DIR: "/opt/hadoop/etc/hadoop"
+      SERVICE_PRECONDITION: "namenode:9870"
+    volumes:
+      - datanode:/hadoop/dfs/data
+      - ./config/hadoop:/opt/hadoop/etc/hadoop
+
+  # ========= Kafka Connect =========
+  connect:
+    build:
+      context: ./connect
+    hostname: connect
+    container_name: integration_connect
+    restart: unless-stopped
+    depends_on:
+      - kafka
+      - namenode
+    ports:
+      - "8083:8083"
+    environment:
+      CONNECT_BOOTSTRAP_SERVERS: "kafka:29092"
+      CONNECT_REST_ADVERTISED_HOST_NAME: "connect"
+      CONNECT_GROUP_ID: "connect-cluster"
+      CONNECT_CONFIG_STORAGE_TOPIC: "_connect-configs"
+      CONNECT_OFFSET_STORAGE_TOPIC: "_connect-offsets"
+      CONNECT_STATUS_STORAGE_TOPIC: "_connect-status"
+      CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_KEY_CONVERTER: "org.apache.kafka.connect.storage.StringConverter"
+      CONNECT_VALUE_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
+      CONNECT_KEY_CONVERTER_SCHEMAS_ENABLE: "false"
+      CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
+      CONNECT_PLUGIN_PATH: "/usr/share/java,/usr/share/confluent-hub-components"
+      HADOOP_CONF_DIR: "/etc/hadoop"
+      CONNECT_LOG4J_ROOT_LOGLEVEL: "INFO"
+    volumes:
+      - ./config/hadoop:/etc/hadoop
+
+  # ========= Spark Streaming =========
+  speed-stream:
+    image: spark:3.5.7-python3
+    container_name: integration_speed_stream
+    restart: unless-stopped
+    depends_on:
+      - kafka
+      - redis
+    user: "0"
+    environment:
+      TOPIC: "ecommerce-events"
+      KAFKA_BOOTSTRAP: "kafka:29092"
+      REDIS_HOST: "redis"
+      REDIS_PORT: "6379"
+      HOME: "/root"
+      PIP_NO_CACHE_DIR: "1"
+    volumes:
+      - ./speed:/opt/app
+      - speed_checkpoints:/tmp/spark_checkpoints
+      - speed_ivy:/root/.ivy2
+      - speed_pip:/root/.cache/pip
+    command: >
+      bash -lc "python3 -m pip install --no-cache-dir redis &&
+      /opt/spark/bin/spark-submit --master local[*]
+      --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.7
+      /opt/app/stream.py"
+
+  # ========= Spark Batch =========
+  batch-job:
+    image: spark:3.5.7-python3
+    container_name: integration_batch_job
+    depends_on:
+      - namenode
+      - datanode
+      - hive-metastore
+      - hive-server2
+    user: "0"
+    environment:
+      RAW_EVENTS_PATH: "hdfs://namenode:8020/data/raw/events"
+      HIVE_DATABASE: "default"
+      HIVE_EVENTS_TABLE: "ecommerce_events"
+      SPARK_WAREHOUSE: "hdfs://namenode:8020/warehouse/tablespace/managed/hive"
+      HADOOP_CONF_DIR: "/opt/hadoop/etc/hadoop"
+      HOME: "/root"
+    volumes:
+      - ./batch:/opt/app
+      - ./config/hadoop:/opt/hadoop/etc/hadoop
+      - ./config/hive:/opt/spark/conf
+      - batch_ivy:/root/.ivy2
+      - batch_pip:/root/.cache/pip
+    command: >
+      bash -lc "/opt/spark/bin/spark-submit --master local[*]
+      /opt/app/batch_job.py"
+
+  # ========= Hive =========
+  hive-metastore-db:
+    image: bde2020/hive-metastore-postgresql:2.3.0
+    container_name: integration_hive_metastore_db
+    hostname: hive-metastore-db
+
+  hive-metastore:
+    image: bde2020/hive:2.3.2-postgresql-metastore
+    container_name: integration_hive_metastore
+    hostname: hive-metastore
+    depends_on:
+      - hive-metastore-db
+      - namenode
+      - datanode
+    command: /opt/hive/bin/hive --service metastore
+    environment:
+      HIVE_CORE_CONF_javax_jdo_option_ConnectionURL: "jdbc:postgresql://hive-metastore-db:5432/metastore"
+      HIVE_CORE_CONF_javax_jdo_option_ConnectionDriverName: "org.postgresql.Driver"
+      HIVE_CORE_CONF_javax_jdo_option_ConnectionUserName: "hive"
+      HIVE_CORE_CONF_javax_jdo_option_ConnectionPassword: "hive"
+      HIVE_CORE_CONF_hive_metastore_uris: "thrift://hive-metastore:9083"
+      HADOOP_CONF_DIR: "/opt/hadoop/etc/hadoop"
+      SERVICE_PRECONDITION: "namenode:9870 datanode:9864 hive-metastore-db:5432"
+    ports:
+      - "9083:9083"
+    volumes:
+      - ./config/hadoop:/opt/hadoop/etc/hadoop
+      - ./config/hive:/opt/hive/conf
+
+  hive-server2:
+    image: bde2020/hive:2.3.2-postgresql-metastore
+    container_name: integration_hive_server2
+    hostname: hive-server2
+    depends_on:
+      - hive-metastore
+    environment:
+      HIVE_CORE_CONF_javax_jdo_option_ConnectionURL: "jdbc:postgresql://hive-metastore-db:5432/metastore"
+      HIVE_CORE_CONF_javax_jdo_option_ConnectionDriverName: "org.postgresql.Driver"
+      HIVE_CORE_CONF_javax_jdo_option_ConnectionUserName: "hive"
+      HIVE_CORE_CONF_javax_jdo_option_ConnectionPassword: "hive"
+      HIVE_CORE_CONF_hive_metastore_uris: "thrift://hive-metastore:9083"
+      HADOOP_CONF_DIR: "/opt/hadoop/etc/hadoop"
+      SERVICE_PRECONDITION: "hive-metastore:9083"
+    ports:
+      - "10000:10000"
+    volumes:
+      - ./config/hadoop:/opt/hadoop/etc/hadoop
+      - ./config/hive:/opt/hive/conf
+
+volumes:
+  namenode:
+  datanode:
+  speed_checkpoints:
+  speed_ivy:
+  speed_pip:
+  batch_ivy:
+  batch_pip:
