@@ -218,6 +218,7 @@ def escribir_a_redis(df_batch, batch_id):
 query = (
     df_agregado.writeStream
     .outputMode("update")
+    .trigger(processingTime="2 minutes")
     .option("checkpointLocation", "/tmp/spark_checkpoints/speedlayer")
     .foreachBatch(escribir_a_redis)
     .start()
