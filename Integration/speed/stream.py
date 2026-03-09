@@ -1,7 +1,11 @@
 import os
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import from_json, col, to_timestamp
+<<<<<<< HEAD
 from pyspark.sql.types import StructType, StructField, StringType, DoubleType, IntegerType, ArrayType
+=======
+from pyspark.sql.types import StructType, StructField, StringType, DoubleType
+>>>>>>> e3a4689d2ed20a1d98ad3ac7c8d812e81ce23fc4
 
 TOPIC = os.getenv("TOPIC", "ecommerce-events")
 KAFKA_BOOTSTRAP = os.getenv("KAFKA_BOOTSTRAP", "localhost:9092")
@@ -15,6 +19,7 @@ spark = (
 )
 spark.sparkContext.setLogLevel("WARN")
 
+<<<<<<< HEAD
 items_schema = ArrayType(
     StructType(
         [
@@ -29,11 +34,14 @@ items_schema = ArrayType(
     True,
 )
 
+=======
+>>>>>>> e3a4689d2ed20a1d98ad3ac7c8d812e81ce23fc4
 schema = StructType([
     StructField("event_id", StringType(), True),
     StructField("event_time", StringType(), True),   # viene como ISO con Z
     StructField("event_name", StringType(), True),
     StructField("user_id", StringType(), True),
+<<<<<<< HEAD
     StructField("session_id", StringType(), True),
     StructField("device", StringType(), True),
     StructField("currency", StringType(), True),
@@ -49,6 +57,11 @@ schema = StructType([
     StructField("page_url", StringType(), True),
     StructField("referrer", StringType(), True),
     StructField("items", items_schema, True),
+=======
+    StructField("product_id", StringType(), True),
+    StructField("price", DoubleType(), True),
+    StructField("revenue", DoubleType(), True),
+>>>>>>> e3a4689d2ed20a1d98ad3ac7c8d812e81ce23fc4
 ])
 
 df_kafka = (
@@ -66,17 +79,25 @@ df_parsed = (
     .select("data.*")
     # ISO con Z -> patrón X
     .withColumn("event_time_ts", to_timestamp(col("event_time"), "yyyy-MM-dd'T'HH:mm:ssX"))
+<<<<<<< HEAD
     .filter(
         col("event_time_ts").isNotNull()
         & col("event_id").isNotNull()
         & col("event_name").isNotNull()
         & col("user_id").isNotNull()
     )
+=======
+    .filter(col("event_time_ts").isNotNull())
+>>>>>>> e3a4689d2ed20a1d98ad3ac7c8d812e81ce23fc4
 )
 
 df_agregado = (
     df_parsed
+<<<<<<< HEAD
     .filter(col("product_id").isNotNull() & col("event_name").isNotNull())
+=======
+    .filter(col("product_id").isNotNull())
+>>>>>>> e3a4689d2ed20a1d98ad3ac7c8d812e81ce23fc4
     .groupBy("product_id", "event_name")
     .count()
 )
@@ -99,4 +120,8 @@ query = (
 )
 
 print(f"⚡ Speed Layer: Kafka={KAFKA_BOOTSTRAP} topic={TOPIC} -> Redis={REDIS_HOST}:{REDIS_PORT}")
+<<<<<<< HEAD
 query.awaitTermination()
+=======
+query.awaitTermination()
+>>>>>>> e3a4689d2ed20a1d98ad3ac7c8d812e81ce23fc4

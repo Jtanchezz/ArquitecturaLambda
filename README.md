@@ -7,7 +7,11 @@ Proyecto de ejemplo de **Lambda Architecture** para procesar eventos de e-commer
 El proyecto simula un flujo de eventos de e-commerce y los procesa en paralelo en dos caminos:
 
 - **Speed Layer**: consume eventos desde Kafka con Spark Structured Streaming y mantiene agregados en tiempo real en Redis.
+<<<<<<< HEAD
 - **Batch Layer**: persiste los eventos raw en HDFS mediante Kafka Connect y los materializa con Spark Batch en Hive.
+=======
+- **Batch Layer**: persiste los eventos raw en HDFS mediante Kafka Connect.
+>>>>>>> e3a4689d2ed20a1d98ad3ac7c8d812e81ce23fc4
 - **Serving Layer**: expone dashboards en Streamlit consultando Redis para realtime y Hive para histórico.
 - **Lambda View**: compara la vista batch con la vista speed en una misma interfaz.
 
@@ -17,9 +21,14 @@ El proyecto simula un flujo de eventos de e-commerce y los procesa en paralelo e
 2. Los eventos ingresan a Kafka en el tópico `ecommerce-events`.
 3. `speed/stream.py` consume el stream, agrupa por `product_id` y `event_name`, y escribe conteos en Redis.
 4. Kafka Connect, usando `connectors/hdfs-sink.json`, guarda los eventos raw en HDFS.
+<<<<<<< HEAD
 5. `batch/batch_job.py` procesa los raw en HDFS, valida el JSON y crea/actualiza la tabla `ecommerce_events` en Hive.
 6. `serving/serving.py` centraliza la conexión y acceso a Redis y Hive.
 7. `serving/streamlit_app.py` construye la interfaz analítica con vistas realtime, históricas y comparativas.
+=======
+5. `serving/serving.py` centraliza la conexión y acceso a Redis y Hive.
+6. `serving/streamlit_app.py` construye la interfaz analítica con vistas realtime, históricas y comparativas.
+>>>>>>> e3a4689d2ed20a1d98ad3ac7c8d812e81ce23fc4
 
 ## Estructura del proyecto
 
@@ -31,8 +40,11 @@ Integration/
 │   └── Dockerfile
 ├── connectors/
 │   └── hdfs-sink.json
+<<<<<<< HEAD
 ├── batch/
 │   └── batch_job.py
+=======
+>>>>>>> e3a4689d2ed20a1d98ad3ac7c8d812e81ce23fc4
 ├── speed/
 │   └── stream.py
 ├── serving/
@@ -79,14 +91,21 @@ Extiende la imagen de Kafka Connect e instala el conector **HDFS Sink**, necesar
 ### `connectors/hdfs-sink.json`
 Configuración del conector que toma mensajes del tópico `ecommerce-events` y los escribe en HDFS en formato JSON bajo `/data/raw/events`.
 
+<<<<<<< HEAD
 ### `batch/batch_job.py`
 Spark Batch que lee los JSON raw desde HDFS, **revalida el esquema** y materializa la tabla `ecommerce_events` en Hive (Parquet, particionada por `event_date`).
 
+=======
+>>>>>>> e3a4689d2ed20a1d98ad3ac7c8d812e81ce23fc4
 ### `speed/stream.py`
 Implementa la **Speed Layer** con Spark Structured Streaming.
 
 - Lee eventos desde Kafka
+<<<<<<< HEAD
 - Parsea y valida el JSON (más campos del esquema)
+=======
+- Parsea el JSON
+>>>>>>> e3a4689d2ed20a1d98ad3ac7c8d812e81ce23fc4
 - Convierte `event_time` a timestamp
 - Filtra eventos válidos
 - Agrega por `product_id` y `event_name`
@@ -133,6 +152,7 @@ La comparación batch vs speed está implementada como:
 Actualmente Redis guarda conteos acumulados por `product_id + event_name`, **sin ventana temporal**.  
 Por eso, la Lambda View representa una comparación funcional entre ambas capas, pero no una reconciliación temporal exacta.
 
+<<<<<<< HEAD
 ## Batch (Spark)
 
 El servicio `batch-job` en `docker-compose.yml` ejecuta el job una vez para materializar la tabla en Hive. Si quieres re-procesar, puedes volver a lanzarlo:
@@ -141,6 +161,8 @@ El servicio `batch-job` en `docker-compose.yml` ejecuta el job una vez para mate
 docker compose run --rm batch-job
 ```
 
+=======
+>>>>>>> e3a4689d2ed20a1d98ad3ac7c8d812e81ce23fc4
 ## Tecnologías
 
 - Python

@@ -130,6 +130,7 @@ services:
       --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.7
       /opt/app/stream.py"
 
+<<<<<<< HEAD
   # ========= Spark Batch =========
   batch-job:
     image: spark:3.5.7-python3
@@ -157,6 +158,8 @@ services:
       bash -lc "/opt/spark/bin/spark-submit --master local[*]
       /opt/app/batch_job.py"
 
+=======
+>>>>>>> e3a4689d2ed20a1d98ad3ac7c8d812e81ce23fc4
   # ========= Hive =========
   hive-metastore-db:
     image: bde2020/hive-metastore-postgresql:2.3.0
@@ -211,6 +214,10 @@ volumes:
   datanode:
   speed_checkpoints:
   speed_ivy:
+<<<<<<< HEAD
   speed_pip:
   batch_ivy:
   batch_pip:
+=======
+  speed_pip:
+>>>>>>> e3a4689d2ed20a1d98ad3ac7c8d812e81ce23fc4
