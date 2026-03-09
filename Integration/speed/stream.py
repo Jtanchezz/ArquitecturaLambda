@@ -1,6 +1,6 @@
 import os
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import from_json, col, to_timestamp
+from pyspark.sql.functions import from_json, col, to_timestamp, lower, trim, upper
 from pyspark.sql.types import (
     StructType,
     StructField,
@@ -195,10 +195,29 @@ df_parsed = (
         & col("event_name").isNotNull()
         & col("user_id").isNotNull()
     )
+)# --- NUEVA CAPA DE PREPROCESAMIENTO Y LIMPIEZA ---
+df_cleaned = (
+    df_parsed
+    # 1. Deduplicación: Evita procesar conteos dobles si Kafka envía el evento dos veces
+    # (Requiere un watermark para que Spark no guarde historiales infinitos en RAM)
+    .withWatermark("event_time_ts", "10 minutes")
+    .dropDuplicates(["event_id"])
+    
+    # 2. Normalización de textos: Evitar problemas de mayúsculas o espacios extra
+    .withColumn("event_name", lower(trim(col("event_name"))))
+    .withColumn("product_id", upper(trim(col("product_id"))))
+    
+    # 3. Filtro de Anomalías (Lógica de Negocio): 
+    # Asegura que si viene un evento con precio o cantidad negativa por error, se descarte
+    .filter(
+        (col("price").isNull() | (col("price") >= 0)) &
+        (col("quantity").isNull() | (col("quantity") >= 0)) &
+        (col("revenue").isNull() | (col("revenue") >= 0))
+    )
 )
 
 df_agregado = (
-    df_parsed
+    df_cleaned
     .filter(col("product_id").isNotNull() & col("event_name").isNotNull())
     .groupBy("product_id", "event_name")
     .count()
