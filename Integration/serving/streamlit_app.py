@@ -238,7 +238,13 @@ def realtime_business_tables(df_rt: pd.DataFrame):
 
 def realtime_funnel_snapshot(df_rt: pd.DataFrame) -> pd.DataFrame:
     if df_rt is None or df_rt.empty:
-        return pd.DataFrame({"event_name": FUNNEL_EVENTS, "count": [0] * len(FUNNEL_EVENTS)})
+        out = pd.DataFrame(
+            {
+                "event_name": FUNNEL_EVENTS,
+                "count": [0] * len(FUNNEL_EVENTS),
+            }
+        )
+        return add_share(out, "count", "share")
 
     by_event, _, _ = realtime_business_tables(df_rt)
     rows = []
@@ -838,6 +844,8 @@ with tab_rt:
         with c1:
             st.subheader("Tabla funnel")
             tbl = funnel_rt.copy()
+            if "share" not in tbl.columns:
+                tbl = add_share(tbl, "count", "share")
             tbl["share_pct"] = (tbl["share"] * 100.0).round(2)
             st.dataframe(tbl, use_container_width=True, height=320)
 
