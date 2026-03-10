@@ -19,6 +19,7 @@ SPARK_WAREHOUSE = os.getenv(
     "hdfs://namenode:8020/warehouse/tablespace/managed/hive",
 )
 BATCH_WRITE_MODE = os.getenv("BATCH_WRITE_MODE", "append")
+BATCH_FORCE_RECREATE = os.getenv("BATCH_FORCE_RECREATE", "1") == "1"
 
 items_schema = ArrayType(
     StructType(
@@ -210,6 +211,17 @@ def main() -> None:
 
     spark.sql(f"CREATE DATABASE IF NOT EXISTS {HIVE_DATABASE}")
     table_full = f"{HIVE_DATABASE}.{HIVE_EVENTS_TABLE}"
+
+    if BATCH_FORCE_RECREATE:
+        # Evita errores por tablas/vistas antiguas con SerDe faltante
+        try:
+            spark.sql(f"DROP VIEW IF EXISTS {table_full}")
+        except Exception:
+            pass
+        try:
+            spark.sql(f"DROP TABLE IF EXISTS {table_full}")
+        except Exception:
+            pass
 
     table_exists = spark.catalog.tableExists(table_full)
     write_mode = BATCH_WRITE_MODE

@@ -144,6 +144,7 @@ services:
       RAW_EVENTS_PATH: "hdfs://namenode:8020/data/raw/events"
       HIVE_DATABASE: "default"
       HIVE_EVENTS_TABLE: "ecommerce_events"
+      BATCH_FORCE_RECREATE: "1"
       SPARK_WAREHOUSE: "hdfs://namenode:8020/warehouse/tablespace/managed/hive"
       HADOOP_CONF_DIR: "/opt/hadoop/etc/hadoop"
       HOME: "/root"
